@@ -60,14 +60,16 @@ func runSend(cmd *cobra.Command, args []string) {
 	// e.g., IP ending in 105 with offset 47 = 10547
 	code := lastOctet*100 + portOffset
 
-	// start the HTTP server
+	// start the HTTP server with custom mux (avoid global handler conflicts)
+	mux := http.NewServeMux()
 	server := &http.Server{
-		Addr: fmt.Sprintf(":%d", port),
+		Addr:    fmt.Sprintf(":%d", port),
+		Handler: mux,
 	}
 
 	if info.IsDir() {
 		// Serve directory as zip
-		http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 			fmt.Println("\nReceiver connected! Starting transfer...")
 			w.Header().Set("Content-Type", "application/zip")
 			w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s.zip\"", filepath.Base(path)))
@@ -125,7 +127,7 @@ func runSend(cmd *cobra.Command, args []string) {
 		})
 	} else {
 		// Serve single file
-		http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 			fmt.Println("\nReceiver connected! Starting transfer...")
 			w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filepath.Base(path)))
 
@@ -153,7 +155,12 @@ func runSend(cmd *cobra.Command, args []string) {
 	fmt.Println("\nPress Ctrl+C to cancel")
 
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		fmt.Println("server error:", err)
+		if strings.Contains(err.Error(), "address already in use") || strings.Contains(err.Error(), "Only one usage") {
+			fmt.Printf("error: Port %d is already in use. Try again to get a different code.\n", port)
+		} else {
+			fmt.Println("server error:", err)
+		}
+		os.Exit(1)
 	}
 }
 
@@ -200,8 +207,9 @@ func getLocalIP() (string, error) {
 }
 
 func generatePortOffset() int {
-	rand.Seed(time.Now().UnixNano())
-	return rand.Intn(100) // 00-99
+	src := rand.NewSource(time.Now().UnixNano())
+	r := rand.New(src)
+	return r.Intn(100) // 00-99
 }
 
 func getLastOctet(ip string) (int, error) {

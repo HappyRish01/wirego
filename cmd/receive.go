@@ -33,7 +33,14 @@ func runReceive(cmd *cobra.Command, args []string) {
 
 	code, err := strconv.Atoi(codeStr)
 	if err != nil || code < 100 || code > 25499 {
-		fmt.Println("error: Invalid code. Must be between 00100 and 25499")
+		fmt.Println("error: Invalid code. Code must be between 100 and 25499")
+		os.Exit(1)
+	}
+
+	// Validate last octet is in valid range (1-254)
+	lastOctet := code / 100
+	if lastOctet < 1 || lastOctet > 254 {
+		fmt.Println("error: Invalid code. Decoded IP octet out of range")
 		os.Exit(1)
 	}
 
@@ -64,7 +71,7 @@ func runReceive(cmd *cobra.Command, args []string) {
 
 	// Decode the 5-digit code
 	// code = lastOctet * 100 + portOffset
-	lastOctet := code / 100
+	// lastOctet already calculated during validation
 	portOffset := code % 100
 	port := 8080 + portOffset
 
@@ -101,12 +108,23 @@ func runReceive(cmd *cobra.Command, args []string) {
 }
 
 func downloadFile(url, saveDir string) error {
+	// Use a transport with connection timeout but no overall timeout for large files
+	transport := &http.Transport{
+		ResponseHeaderTimeout: 10 * time.Second,
+	}
 	client := &http.Client{
-		Timeout: time.Hour, // Allow long downloads
+		Transport: transport,
+		Timeout:   0, // No overall timeout - allow large files
 	}
 
 	resp, err := client.Get(url)
 	if err != nil {
+		if strings.Contains(err.Error(), "connection refused") {
+			return fmt.Errorf("sender not found. Make sure sender is running and code is correct")
+		}
+		if strings.Contains(err.Error(), "timeout") || strings.Contains(err.Error(), "deadline") {
+			return fmt.Errorf("connection timed out. Check if sender is on the same network")
+		}
 		return err
 	}
 	defer resp.Body.Close()

@@ -2,10 +2,6 @@
 
 Share files between computers without the cloud. Just you, your friend, and your local network.
 
-## What is this?
-
-Ever wanted to send a file to your friend sitting next to you, but ended up uploading it to Google Drive, waiting, then having them download it? Stupid, right?
-
 WireGo lets you send files directly from your computer to theirs. No uploads. No accounts. No internet required (just the same WiFi).
 
 ```
@@ -72,9 +68,6 @@ WireGo zips it up, sends it, and unzips it on the other end automatically.
 wirego send .
 ```
 
-## The code thing
-
-The 5-digit code isn't random - it actually contains the sender's network info encoded in it. So when your friend enters the code, WireGo knows exactly where to connect. No scanning, no configuration.
 
 ## Things to know
 
@@ -82,14 +75,6 @@ The 5-digit code isn't random - it actually contains the sender's network info e
 - Your firewall might block it - if it asks, allow it
 - The transfer is **not encrypted** (it's local network, but still - don't send your passwords.txt)
 - Works on Windows, Mac, and Linux
-
-## When it doesn't work
-
-**"Connection refused"** - The sender closed the terminal or you typed the wrong code.
-
-**"Connection timed out"** - You're probably not on the same network, or there's a firewall blocking it.
-
-**Can't find local IP** - You might not be connected to any network.
 
 ## Build it yourself
 
@@ -99,14 +84,6 @@ cd wirego
 go build .
 ```
 
-## Why I made this
-
-I got tired of:
-- Uploading to Google Drive just to share with someone 5 feet away
-- Typing long `scp` commands and forgetting the syntax every time
-- USB drives (who carries those anymore?)
-
-So I built this. It's simple, it works, and it's fast.
 
 ## License
 

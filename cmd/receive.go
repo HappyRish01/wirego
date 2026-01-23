@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -17,9 +16,9 @@ import (
 )
 
 var receiveCmd = &cobra.Command{
-	Use:   "receive [code] [save-directory]",
+	Use:   "receive [code] [folder-name]",
 	Short: "receive files from a sender",
-	Long:  "receive files from a sender using the 3-digit code they provide.",
+	Long:  "receive files from a sender using the 5-digit code they provide.",
 	Args:  cobra.ExactArgs(2),
 	Run:   runReceive,
 }
@@ -30,58 +29,64 @@ func init() {
 
 func runReceive(cmd *cobra.Command, args []string) {
 	codeStr := args[0]
-	saveDir := args[1]
+	folderName := args[1]
 
 	code, err := strconv.Atoi(codeStr)
-	if err != nil || code < 100 || code > 999 {
-		fmt.Println("Error: Invalid code. Must be a 3-digit number (100-999)")
+	if err != nil || code < 100 || code > 25499 {
+		fmt.Println("error: Invalid code. Must be between 00100 and 25499")
 		os.Exit(1)
+	}
+
+	// Convert folder name to absolute path in current directory
+	var saveDir string
+	if filepath.IsAbs(folderName) {
+		saveDir = folderName
+	} else {
+		cwd, err := os.Getwd()
+		if err != nil {
+			fmt.Println("error getting current directory:", err)
+			os.Exit(1)
+		}
+		saveDir = filepath.Join(cwd, folderName)
 	}
 
 	// Create save directory if it doesn't exist
 	if err := os.MkdirAll(saveDir, 0755); err != nil {
-		fmt.Println("Error creating directory:", err)
+		fmt.Println("error creating directory:", err)
 		os.Exit(1)
 	}
 
 	fmt.Println("\nWireGo - P2P File Sharing")
 	fmt.Println(strings.Repeat("─", 40))
-	fmt.Printf("Code: %03d\n", code)
+	fmt.Printf("Code: %05d\n", code)
 	fmt.Printf("Save to: %s\n", saveDir)
 	fmt.Println(strings.Repeat("─", 40))
-	fmt.Println("\nSearching for sender on local network...")
 
-	// Calculate port from code
-	port := 8080 + (code % 100)
+	// Decode the 5-digit code
+	// code = lastOctet * 100 + portOffset
+	lastOctet := code / 100
+	portOffset := code % 100
+	port := 8080 + portOffset
 
 	// Get local network prefix
 	localIP, err := getLocalIP()
 	if err != nil {
-		fmt.Println("Error getting local IP:", err)
+		fmt.Println("error getting local IP:", err)
 		os.Exit(1)
 	}
 
 	// Extract network prefix (e.g., "192.168.1.")
 	parts := strings.Split(localIP, ".")
 	if len(parts) != 4 {
-		fmt.Println("Error: Invalid local IP format")
+		fmt.Println("error: invalid local IP format")
 		os.Exit(1)
 	}
 	networkPrefix := strings.Join(parts[:3], ".") + "."
 
-	// Scan local network for the sender
-	senderIP := scanForSender(networkPrefix, port)
-	if senderIP == "" {
-		fmt.Println("\nCould not find sender on local network.")
-		fmt.Println("   Make sure:")
-		fmt.Println("   - You're on the same network as the sender")
-		fmt.Println("   - The sender is still running 'wirego send'")
-		fmt.Println("   - The code is correct")
-		os.Exit(1)
-	}
+	// Construct sender IP directly from code
+	senderIP := fmt.Sprintf("%s%d", networkPrefix, lastOctet)
 
-	fmt.Printf("\nFound sender at %s:%d\n", senderIP, port)
-	fmt.Println("Starting download...")
+	fmt.Printf("\nConnecting to sender at %s:%d...\n", senderIP, port)
 
 	// Download the file
 	url := fmt.Sprintf("http://%s:%d/", senderIP, port)
@@ -93,36 +98,6 @@ func runReceive(cmd *cobra.Command, args []string) {
 
 	fmt.Println("\nDownload complete!")
 	fmt.Printf("Files saved to: %s\n", saveDir)
-}
-
-func scanForSender(networkPrefix string, port int) string {
-	// Create a channel for results
-	results := make(chan string, 255)
-	timeout := time.Millisecond * 500
-
-	// Scan all IPs in the network
-	for i := 1; i <= 254; i++ {
-		go func(ip string) {
-			conn, err := net.DialTimeout("tcp", fmt.Sprintf("%s:%d", ip, port), timeout)
-			if err == nil {
-				conn.Close()
-				results <- ip
-			} else {
-				results <- ""
-			}
-		}(networkPrefix + strconv.Itoa(i))
-	}
-
-	// Collect results
-	var foundIP string
-	for i := 0; i < 254; i++ {
-		ip := <-results
-		if ip != "" && foundIP == "" {
-			foundIP = ip
-		}
-	}
-
-	return foundIP
 }
 
 func downloadFile(url, saveDir string) error {

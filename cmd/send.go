@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -44,11 +45,20 @@ func runSend(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
-	// gen 3-digit code
-	code := generateCode()
+	// extract last octet from IP
+	lastOctet, err := getLastOctet(localIP)
+	if err != nil {
+		fmt.Println("error parsing IP:", err)
+		os.Exit(1)
+	}
 
-	// get the available port
-	port := 8080 + (code % 100)
+	// generate port offset (00-99)
+	portOffset := generatePortOffset()
+	port := 8080 + portOffset
+
+	// create 5-digit code: lastOctet * 100 + portOffset
+	// e.g., IP ending in 105 with offset 47 = 10547
+	code := lastOctet*100 + portOffset
 
 	// start the HTTP server
 	server := &http.Server{
@@ -134,23 +144,13 @@ func runSend(cmd *cobra.Command, args []string) {
 	// print connection info
 	fmt.Println("\nWireGo - P2P File Sharing")
 	fmt.Println(strings.Repeat("─", 40))
-	// if info.IsDir() {
-	// 	fmt.Printf("Sharing directory: %s\n", path)
-	// } else {
-	// 	fmt.Printf("Sharing file: %s\n", path)
-	// }
-	// fmt.Println(strings.Repeat("─", 40))
-	fmt.Printf("Code: %03d\n", code)
+	fmt.Printf("Code: %05d\n", code)
 	fmt.Printf("IP: %s\n", localIP)
 	fmt.Printf("Port: %d\n", port)
 	fmt.Println(strings.Repeat("─", 40))
 	fmt.Println("\nWaiting for the receiver...")
-	fmt.Println("Receiver should run: wirego receive", code, "<save-directory>")
+	fmt.Printf("Receiver should run: wirego receive %05d <folder-name>\n", code)
 	fmt.Println("\nPress Ctrl+C to cancel")
-
-	// store connection info for receiver
-	// in this simple version, code encodes: IP's last octet * 1000 + port offset
-	// the receiver will need to be on same network and scan for the port
 
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		fmt.Println("server error:", err)
@@ -163,18 +163,55 @@ func getLocalIP() (string, error) {
 		return "", err
 	}
 
+	var fallbackIP string
+
 	for _, addr := range addrs {
 		if ipnet, ok := addr.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
-			if ipnet.IP.To4() != nil {
-				return ipnet.IP.String(), nil
+			ip := ipnet.IP.To4()
+			if ip == nil {
+				continue
+			}
+
+			// Skip link-local addresses (169.254.x.x)
+			if ip[0] == 169 && ip[1] == 254 {
+				continue
+			}
+
+			// Prefer private network IPs
+			// 10.x.x.x, 172.16-31.x.x, 192.168.x.x
+			if ip[0] == 10 ||
+				(ip[0] == 172 && ip[1] >= 16 && ip[1] <= 31) ||
+				(ip[0] == 192 && ip[1] == 168) {
+				return ip.String(), nil
+			}
+
+			// Store as fallback
+			if fallbackIP == "" {
+				fallbackIP = ip.String()
 			}
 		}
+	}
+
+	if fallbackIP != "" {
+		return fallbackIP, nil
 	}
 
 	return "", fmt.Errorf("no local IP found")
 }
 
-func generateCode() int {
+func generatePortOffset() int {
 	rand.Seed(time.Now().UnixNano())
-	return rand.Intn(900) + 100 // 100-999
+	return rand.Intn(100) // 00-99
+}
+
+func getLastOctet(ip string) (int, error) {
+	parts := strings.Split(ip, ".")
+	if len(parts) != 4 {
+		return 0, fmt.Errorf("invalid IP format")
+	}
+	octet, err := strconv.Atoi(parts[3])
+	if err != nil {
+		return 0, err
+	}
+	return octet, nil
 }

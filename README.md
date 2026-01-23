@@ -2,7 +2,19 @@
 
 A simple P2P file sharing CLI application. Share files directly between computers on the same network using a simple 5-digit code.
 
-## Installation
+## Quick Install
+
+**macOS/Linux:**
+```bash
+curl -sSL https://raw.githubusercontent.com/HappyRish01/wirego/main/install.sh | bash
+```
+
+**Windows (PowerShell):**
+```powershell
+irm https://raw.githubusercontent.com/HappyRish01/wirego/main/install.ps1 | iex
+```
+
+## Manual Installation
 
 ### Download Binary
 

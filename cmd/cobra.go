@@ -10,9 +10,9 @@ import (
 
 // this is the root command
 var root = &cobra.Command{
-	Use:   "wirego-cli",
+	Use:   "wirego",
 	Short: "p2p fs cli application",
-	Long:  "a cli application to share p2p over network",
+	Long:  "A CLI application to share files P2P over the network.",
 }
 
 func Run() {

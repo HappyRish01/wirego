@@ -1,6 +1,6 @@
 package main
 
-import "github.com/HappyRish01/wirego/cmd/wirego"
+import cmd "github.com/HappyRish01/wirego/cmd"
 
 func main() {
 	cmd.Run()

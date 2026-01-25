@@ -97,7 +97,7 @@ func runSend(cmd *cobra.Command, args []string) {
 						return err
 					}
 					dirCount++
-					// fmt.Printf("   📁 Adding directory: %s\n", relPath)
+					// fmt.Printf("    Adding directory: %s\n", relPath)
 					return nil
 				}
 
@@ -119,7 +119,7 @@ func runSend(cmd *cobra.Command, args []string) {
 				}
 
 				fileCount++
-				// fmt.Printf("   📄 Adding file: %s\n", relPath)
+				// fmt.Printf("    Adding file: %s\n", relPath)
 				return nil
 			})
 
@@ -138,7 +138,11 @@ func runSend(cmd *cobra.Command, args []string) {
 			}
 			defer file.Close()
 
-			io.Copy(w, file)
+			// io.Copy(w, file)
+			// if we can increase the buffer that would be great
+			// need to check and what should be the appropriate limit
+			buf := make([]byte, 512*1024)
+			io.CopyBuffer(w, file, buf)
 			fmt.Println("Transfer complete!")
 		})
 	}

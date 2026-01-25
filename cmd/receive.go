@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"archive/zip"
-	"bytes"
 	"fmt"
 	"io"
 	"net/http"
@@ -129,87 +128,88 @@ func downloadFile(url, saveDir string) error {
 	}
 	defer resp.Body.Close()
 
-	// Check Content-Type to determine if it's a zip
-	contentType := resp.Header.Get("Content-Type")
-	contentDisposition := resp.Header.Get("Content-Disposition")
-
 	// Extract filename from Content-Disposition
 	filename := "downloaded_file"
-	if contentDisposition != "" {
-		if idx := strings.Index(contentDisposition, "filename="); idx != -1 {
-			filename = contentDisposition[idx+9:]
-			filename = strings.Trim(filename, "\"")
+	if cd := resp.Header.Get("Content-Disposition"); cd != "" {
+		if idx := strings.Index(cd, "filename="); idx != -1 {
+			filename = strings.Trim(cd[idx+9:], `"`)
 		}
 	}
 
-	// Read the entire response
-	data, err := io.ReadAll(resp.Body)
+	filePath := filepath.Join(saveDir, filename)
+
+	out, err := os.Create(filePath)
+	if err != nil {
+		return nil
+	}
+	defer out.Close()
+	// i can't load the whole response body into ram i need to buffer it
+
+	buf := make([]byte, 512*1024) // 512 kB budder babe
+	_, err = io.CopyBuffer(out, resp.Body, buf)
+
 	if err != nil {
 		return err
 	}
 
 	// Check if it's a zip file
-	if contentType == "application/zip" || strings.HasSuffix(filename, ".zip") {
-		// Extract zip
-		return extractZip(data, saveDir)
+	if strings.HasSuffix(strings.ToLower(filename), ".zip") {
+		err = extractZip(filePath, saveDir)
+		if err != nil {
+			return err
+		}
+		// Optional: delete zip after extraction
+		_ = os.Remove(filePath)
 	}
 
-	// Save as regular file
-	// Remove .zip extension for display if present
-	displayName := strings.TrimSuffix(filename, ".zip")
-	if displayName == filename {
-		displayName = filename
-	}
-
-	filePath := filepath.Join(saveDir, filename)
-	return os.WriteFile(filePath, data, 0644)
+	return nil
 }
 
-func extractZip(data []byte, destDir string) error {
-	reader, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+func extractZip(zipPath, destDir string) error {
+	r, err := zip.OpenReader(zipPath)
 	if err != nil {
 		return err
 	}
+	defer r.Close()
 
-	for _, file := range reader.File {
-		filePath := filepath.Join(destDir, file.Name)
+	for _, f := range r.File {
+		fpath := filepath.Join(destDir, f.Name)
 
-		// Prevent zip slip vulnerability
-		if !strings.HasPrefix(filepath.Clean(filePath), filepath.Clean(destDir)+string(os.PathSeparator)) {
-			return fmt.Errorf("invalid file path: %s", file.Name)
+		// Zip Slip protection
+		if !strings.HasPrefix(filepath.Clean(fpath), filepath.Clean(destDir)+string(os.PathSeparator)) {
+			return fmt.Errorf("illegal file path: %s", f.Name)
 		}
 
-		if file.FileInfo().IsDir() {
-			os.MkdirAll(filePath, 0755)
+		if f.FileInfo().IsDir() {
+			if err := os.MkdirAll(fpath, 0755); err != nil {
+				return err
+			}
 			continue
 		}
 
-		// Create parent directories
-		if err := os.MkdirAll(filepath.Dir(filePath), 0755); err != nil {
+		if err := os.MkdirAll(filepath.Dir(fpath), 0755); err != nil {
 			return err
 		}
 
-		// Extract file
-		outFile, err := os.Create(filePath)
+		dst, err := os.Create(fpath)
 		if err != nil {
 			return err
 		}
 
-		rc, err := file.Open()
+		src, err := f.Open()
 		if err != nil {
-			outFile.Close()
+			dst.Close()
 			return err
 		}
 
-		_, err = io.Copy(outFile, rc)
-		outFile.Close()
-		rc.Close()
+		_, err = io.Copy(dst, src)
+
+		dst.Close()
+		src.Close()
 
 		if err != nil {
 			return err
 		}
-
-		fmt.Printf("    Extracted: %s\n", file.Name)
 	}
 
 	return nil

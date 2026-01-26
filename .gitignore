@@ -1,1 +1,5 @@
 wirego.exe
+test/
+test_received/
+*.exe
+sender_output.txt

@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -68,11 +69,24 @@ func runSend(cmd *cobra.Command, args []string) {
 		Handler: mux,
 	}
 
+	// i need to wait for each client to download then close the server
+	var wg sync.WaitGroup
+	var hasTransfered sync.Once
 	done := make(chan struct{})
 
 	if info.IsDir() {
 		// Serve directory as zip
 		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+			wg.Add(1)
+			defer wg.Done()
+
+			hasTransfered.Do(func() {
+				go func() {
+					wg.Wait()
+					close(done) // single from here
+				}()
+			})
+
 			fmt.Println("\nReceiver connected! Starting transfer...")
 			w.Header().Set("Content-Type", "application/zip")
 			w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s.zip\"", filepath.Base(path)))
@@ -127,11 +141,19 @@ func runSend(cmd *cobra.Command, args []string) {
 			})
 
 			fmt.Printf("\nTransfer complete! (%d files, %d directories)\n", fileCount, dirCount)
-			close(done) // completion signal
 		})
 	} else {
 		// Serve single file
 		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+			wg.Add(1)
+			defer wg.Done()
+
+			hasTransfered.Do(func() {
+				go func() {
+					wg.Wait()
+					close(done) // single from here
+				}()
+			})
 			fmt.Println("\nReceiver connected! Starting transfer...")
 			w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filepath.Base(path)))
 
@@ -143,14 +165,16 @@ func runSend(cmd *cobra.Command, args []string) {
 			defer file.Close()
 
 			// io.Copy(w, file)
-			// if we can increase the buffer that would be great
+			// if we can increase the buffer that would be great for higher throughtput
 			// need to check and what should be the appropriate limit
 			buf := make([]byte, 512*1024)
 			io.CopyBuffer(w, file, buf)
 			fmt.Println("Transfer complete!")
-			close(done) // completion signal
 		})
 	}
+
+	// there is a proble with the channel approac if more than 1 client joins simultaneously it'd crash
+	// solution is clo
 
 	// print connection info
 	fmt.Println("\nWireGo - P2P File Sharing")

@@ -158,7 +158,7 @@ func downloadFile(url, saveDir string) error {
 		if err != nil {
 			return err
 		}
-		// Optional: delete zip after extraction
+		// delete zip after extraction
 		_ = os.Remove(filePath)
 	}
 

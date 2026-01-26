@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"archive/zip"
+	"context"
 	"fmt"
 	"io"
 	"math/rand"
@@ -67,6 +68,8 @@ func runSend(cmd *cobra.Command, args []string) {
 		Handler: mux,
 	}
 
+	done := make(chan struct{})
+
 	if info.IsDir() {
 		// Serve directory as zip
 		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -124,6 +127,7 @@ func runSend(cmd *cobra.Command, args []string) {
 			})
 
 			fmt.Printf("\nTransfer complete! (%d files, %d directories)\n", fileCount, dirCount)
+			close(done) // completion signal
 		})
 	} else {
 		// Serve single file
@@ -144,6 +148,7 @@ func runSend(cmd *cobra.Command, args []string) {
 			buf := make([]byte, 512*1024)
 			io.CopyBuffer(w, file, buf)
 			fmt.Println("Transfer complete!")
+			close(done) // completion signal
 		})
 	}
 
@@ -158,14 +163,19 @@ func runSend(cmd *cobra.Command, args []string) {
 	fmt.Printf("Receiver should run: wirego receive %05d <folder-name>\n", code)
 	fmt.Println("\nPress Ctrl+C to cancel")
 
-	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		if strings.Contains(err.Error(), "address already in use") || strings.Contains(err.Error(), "Only one usage") {
-			fmt.Printf("error: Port %d is already in use. Try again to get a different code.\n", port)
-		} else {
-			fmt.Println("server error:", err)
+	go func() {
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			if strings.Contains(err.Error(), "address already in use") || strings.Contains(err.Error(), "Only one usage") {
+				fmt.Printf("error: Port %d is already in use. Try again to get a different code.\n", port)
+			} else {
+				fmt.Println("server error:", err)
+			}
+			os.Exit(1)
 		}
-		os.Exit(1)
-	}
+	}()
+
+	<-done
+	server.Shutdown(context.Background())
 }
 
 func getLocalIP() (string, error) {

@@ -9,8 +9,10 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
+	"github.com/HappyRish01/wirego/pkg"
 	"github.com/spf13/cobra"
 )
 
@@ -20,6 +22,17 @@ var receiveCmd = &cobra.Command{
 	Long:  "receive files from a sender using the 5-digit code they provide.",
 	Args:  cobra.ExactArgs(2),
 	Run:   runReceive,
+}
+
+type countingReader struct {
+	r     io.Reader
+	count *uint64
+}
+
+func (cr *countingReader) Read(p []byte) (int, error) {
+	n, err := cr.r.Read(p)
+	atomic.AddUint64(cr.count, uint64(n))
+	return n, err
 }
 
 func init() {
@@ -107,6 +120,9 @@ func runReceive(cmd *cobra.Command, args []string) {
 }
 
 func downloadFile(url, saveDir string) error {
+
+	var totalData uint64
+	startTime := pkg.Start()
 	// Use a transport with connection timeout but no overall timeout for large files
 	transport := &http.Transport{
 		ResponseHeaderTimeout: 10 * time.Second,
@@ -128,6 +144,8 @@ func downloadFile(url, saveDir string) error {
 	}
 	defer resp.Body.Close()
 
+	cr := &countingReader{r: resp.Body, count: &totalData}
+
 	// Extract filename from Content-Disposition
 	filename := "downloaded_file"
 	if cd := resp.Header.Get("Content-Disposition"); cd != "" {
@@ -146,11 +164,13 @@ func downloadFile(url, saveDir string) error {
 	// i can't load the whole response body into ram i need to buffer it
 
 	buf := make([]byte, 512*1024) // 512 kB budder babe
-	_, err = io.CopyBuffer(out, resp.Body, buf)
+	_, err = io.CopyBuffer(out, cr, buf)
 
 	if err != nil {
 		return err
 	}
+
+	pkg.Ttt(totalData, startTime)
 
 	// Check if it's a zip file
 	if strings.HasSuffix(strings.ToLower(filename), ".zip") {

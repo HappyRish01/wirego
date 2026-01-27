@@ -13,8 +13,10 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/HappyRish01/wirego/pkg"
 	"github.com/spf13/cobra"
 )
 
@@ -28,6 +30,17 @@ var sendCmd = &cobra.Command{
 
 func init() {
 	root.AddCommand(sendCmd)
+}
+
+type countingWriter struct {
+	w     io.Writer
+	count *uint64
+}
+
+func (cw *countingWriter) Write(p []byte) (int, error) {
+	n, err := cw.w.Write(p)
+	atomic.AddUint64(cw.count, uint64(n))
+	return n, err
 }
 
 func runSend(cmd *cobra.Command, args []string) {
@@ -62,6 +75,11 @@ func runSend(cmd *cobra.Command, args []string) {
 	// e.g., IP ending in 105 with offset 47 = 10547
 	code := lastOctet*100 + portOffset
 
+	//timer
+	//creating the data and starting the time
+	var totalData uint64
+	startTime := pkg.Start()
+
 	// start the HTTP server with custom mux (avoid global handler conflicts)
 	mux := http.NewServeMux()
 	server := &http.Server{
@@ -91,7 +109,8 @@ func runSend(cmd *cobra.Command, args []string) {
 			w.Header().Set("Content-Type", "application/zip")
 			w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s.zip\"", filepath.Base(path)))
 
-			zipWriter := zip.NewWriter(w)
+			cw := &countingWriter{w: w, count: &totalData}
+			zipWriter := zip.NewWriter(cw)
 			defer zipWriter.Close()
 
 			fileCount := 0
@@ -141,6 +160,7 @@ func runSend(cmd *cobra.Command, args []string) {
 			})
 
 			fmt.Printf("\nTransfer complete! (%d files, %d directories)\n", fileCount, dirCount)
+			pkg.Ttt(totalData, startTime)
 		})
 	} else {
 		// Serve single file
@@ -164,12 +184,13 @@ func runSend(cmd *cobra.Command, args []string) {
 			}
 			defer file.Close()
 
-			// io.Copy(w, file)
+			cw := &countingWriter{w: w, count: &totalData}
 			// if we can increase the buffer that would be great for higher throughtput
 			// need to check and what should be the appropriate limit
 			buf := make([]byte, 512*1024)
-			io.CopyBuffer(w, file, buf)
+			io.CopyBuffer(cw, file, buf)
 			fmt.Println("Transfer complete!")
+			pkg.Ttt(totalData, startTime)
 		})
 	}
 

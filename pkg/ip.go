@@ -28,6 +28,7 @@ func FindPublicIP() ([]string, error) {
 	)
 
 	peerConnection.OnICECandidate(func(i *webrtc.ICECandidate) {
+		// cause we want only public IPs
 		if i != nil && i.Typ == webrtc.ICECandidateTypeSrflx {
 			mu.Lock()
 			defer mu.Unlock()
@@ -47,13 +48,13 @@ func FindPublicIP() ([]string, error) {
 		return nil, err
 	}
 
-	//this calls the STUN server.
+	// this calls the STUN server.
 	err = peerConnection.SetLocalDescription(offer)
 	if err != nil {
 		return nil, err
 	}
 
-	//wait for receiving all the ICECandidates.
+	// wait for receiving all the ICECandidates.
 	<-gatherDone
 	return address, nil
 }

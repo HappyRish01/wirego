@@ -75,10 +75,8 @@ func runSend(cmd *cobra.Command, args []string) {
 	// e.g., IP ending in 105 with offset 47 = 10547
 	code := lastOctet*100 + portOffset
 
-	//timer
-	//creating the data and starting the time
+	//timer - will be started inside handler
 	var totalData uint64
-	startTime := pkg.Start()
 
 	// start the HTTP server with custom mux (avoid global handler conflicts)
 	mux := http.NewServeMux()
@@ -106,6 +104,7 @@ func runSend(cmd *cobra.Command, args []string) {
 			})
 
 			fmt.Println("\nReceiver connected! Starting transfer...")
+			startTime := pkg.Start() // Start timer right before transfer
 			w.Header().Set("Content-Type", "application/zip")
 			w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s.zip\"", filepath.Base(path)))
 
@@ -175,6 +174,7 @@ func runSend(cmd *cobra.Command, args []string) {
 				}()
 			})
 			fmt.Println("\nReceiver connected! Starting transfer...")
+			startTime := pkg.Start() // Start timer right before transfer
 			w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filepath.Base(path)))
 
 			file, err := os.Open(path)

@@ -122,7 +122,6 @@ func runReceive(cmd *cobra.Command, args []string) {
 func downloadFile(url, saveDir string) error {
 
 	var totalData uint64
-	startTime := pkg.Start()
 	// Use a transport with connection timeout but no overall timeout for large files
 	transport := &http.Transport{
 		ResponseHeaderTimeout: 10 * time.Second,
@@ -163,6 +162,7 @@ func downloadFile(url, saveDir string) error {
 	defer out.Close()
 	// i can't load the whole response body into ram i need to buffer it
 
+	startTime := pkg.Start()      // Start timer right before data transfer
 	buf := make([]byte, 512*1024) // 512 kB budder babe
 	_, err = io.CopyBuffer(out, cr, buf)
 

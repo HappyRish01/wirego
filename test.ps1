@@ -33,7 +33,7 @@ Write-Host "build successful!`n" -ForegroundColor Green
 `
 # Start sender in background
 Write-Host "starting sender..." -ForegroundColor Yellow
-$sender = Start-Process -FilePath ".\wirego.exe" -ArgumentList "send", $testDir -PassThru -NoNewWindow -RedirectStandardOutput ".\sender_output.txt"
+$sender = Start-Process -FilePath ".\wirego.exe" -ArgumentList "send", "-l", $testDir -PassThru -NoNewWindow -RedirectStandardOutput ".\sender_output.txt"
 
 # Wait for server to start and extract code from output
 Start-Sleep -Seconds 2
@@ -50,7 +50,7 @@ Write-Host "sender started with code: $code" -ForegroundColor Cyan
 
 # Run receiver
 Write-Host "`nstarting receiver..." -ForegroundColor Yellow
-.\wirego.exe receive $code $receiveDir
+.\wirego.exe receive "-l" $code $receiveDir 
     
 # Verify received files
 Write-Host "`nverifying received files:" -ForegroundColor Yellow
@@ -62,9 +62,9 @@ if (Test-Path $receiveDir) {
     $receivedCount = (Get-ChildItem -Recurse $receiveDir -File).Count
     
     if ($sentCount -eq $receivedCount) {
-        Write-Host "`nTEST FAILED: Sent $sentCount files, received $receivedCount" -ForegroundColor Red
-    } else {
         Write-Host "`nTEST PASSED: All $sentCount files transferred!" -ForegroundColor Green
+    } else {
+        Write-Host "`nTEST FAILED: Sent $sentCount files, received $receivedCount" -ForegroundColor Red
     }
 } else {
     Write-Host "Receive directory not found!" -ForegroundColor Red

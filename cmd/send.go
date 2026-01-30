@@ -28,8 +28,11 @@ var sendCmd = &cobra.Command{
 	Run:   runSend,
 }
 
+var localMode bool
+
 func init() {
 	root.AddCommand(sendCmd)
+	sendCmd.Flags().BoolVarP(&localMode, "local", "l", false, "Use local network mode (default is WebRTC)")
 }
 
 type countingWriter struct {
@@ -53,6 +56,16 @@ func runSend(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
+	// Choose mode: local network or WebRTC (default)
+	if localMode {
+		sendViaLocalNetwork(path, info)
+	} else {
+		sendViaWebRTC(path, info)
+	}
+}
+
+func sendViaLocalNetwork(path string, info os.FileInfo) {
+
 	// get local IP
 	localIP, err := getLocalIP()
 	if err != nil {
@@ -67,13 +80,14 @@ func runSend(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
-	// generate port offset (00-99)
+	// generate port offset (0-999 for more codes)
 	portOffset := generatePortOffset()
 	port := 8080 + portOffset
 
-	// create 5-digit code: lastOctet * 100 + portOffset
-	// e.g., IP ending in 105 with offset 47 = 10547
-	code := lastOctet*100 + portOffset
+	// create code: lastOctet * 1000 + portOffset
+	// e.g., IP ending in 105 with offset 47 = 105047
+	// This allows codes up to 254999 (254 * 1000 + 999)
+	code := lastOctet*1000 + portOffset
 
 	//timer - will be started inside handler
 	var totalData uint64
@@ -200,12 +214,12 @@ func runSend(cmd *cobra.Command, args []string) {
 	// print connection info
 	fmt.Println("\nWireGo - P2P File Sharing")
 	fmt.Println(strings.Repeat("─", 40))
-	fmt.Printf("Code: %05d\n", code)
+	fmt.Printf("Code: %06d\n", code)
 	fmt.Printf("IP: %s\n", localIP)
 	fmt.Printf("Port: %d\n", port)
 	fmt.Println(strings.Repeat("─", 40))
 	fmt.Println("\nWaiting for the receiver...")
-	fmt.Printf("Receiver should run: wirego receive %05d <folder-name>\n", code)
+	fmt.Printf("Receiver should run: wirego receive %06d <folder-name>\n", code)
 	fmt.Println("\nPress Ctrl+C to cancel")
 
 	go func() {
@@ -221,6 +235,76 @@ func runSend(cmd *cobra.Command, args []string) {
 
 	<-done
 	server.Shutdown(context.Background())
+}
+
+func sendViaWebRTC(path string, info os.FileInfo) {
+	fmt.Println("\nWireGo - WebRTC File Sharing")
+	fmt.Println(strings.Repeat("─", 40))
+	fmt.Println("Initializing WebRTC connection...")
+
+	// Create WebRTC connection
+	webrtc, err := pkg.NewWebRTCConnection()
+	if err != nil {
+		fmt.Println("Error creating WebRTC connection:", err)
+		os.Exit(1)
+	}
+	defer webrtc.Close()
+
+	// Create offer and wait for ICE gathering
+	fmt.Println("Creating offer and gathering ICE candidates...")
+	offerSDP, err := webrtc.CreateOffer()
+	if err != nil {
+		fmt.Println("Error creating offer:", err)
+		os.Exit(1)
+	}
+
+	// Send offer to signaling server and get code
+	fmt.Println("Registering with signaling server...")
+	sig := pkg.NewSignalingClient("")
+	code, err := sig.CreateOffer(offerSDP)
+	if err != nil {
+		fmt.Println("Error:", err)
+		fmt.Println("\nNote: Signaling server is not running.")
+		fmt.Println("For local network transfers, use: wirego send <file> --local")
+		os.Exit(1)
+	}
+	defer sig.Close()
+
+	fmt.Println(strings.Repeat("─", 40))
+	fmt.Printf("Remote Code: %s\n", code)
+	fmt.Println(strings.Repeat("─", 40))
+	fmt.Println("\nWaiting for receiver to connect...")
+	fmt.Printf("Receiver should run: wirego receive %s <folder-name>\n", code)
+	fmt.Println("\nPress Ctrl+C to cancel")
+
+	// Wait for answer from receiver
+	fmt.Println("\nWaiting for receiver's answer...")
+	answerSDP, err := sig.WaitForAnswer()
+	if err != nil {
+		fmt.Println("Error receiving answer:", err)
+		os.Exit(1)
+	}
+
+	// Set remote answer
+	err = webrtc.SetAnswer(answerSDP)
+	if err != nil {
+		fmt.Println("Error setting answer:", err)
+		os.Exit(1)
+	}
+
+	// Wait for connection
+	fmt.Println("Establishing P2P connection...")
+	webrtc.WaitForOpen()
+	fmt.Println("\nReceiver connected! Starting transfer...")
+
+	// Use TransferManager for concurrent file transfers
+	tm := pkg.NewTransferManager(webrtc.PC)
+	if err := tm.SendFiles(path); err != nil {
+		fmt.Printf("Transfer error: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Println("\n✓ Transfer complete!")
 }
 
 func getLocalIP() (string, error) {
@@ -268,7 +352,7 @@ func getLocalIP() (string, error) {
 func generatePortOffset() int {
 	src := rand.NewSource(time.Now().UnixNano())
 	r := rand.New(src)
-	return r.Intn(100) // 00-99
+	return r.Intn(1000) // 0-999 (expanded range)
 }
 
 func getLastOctet(ip string) (int, error) {

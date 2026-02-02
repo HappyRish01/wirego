@@ -133,7 +133,7 @@ func (tm *TransferManager) SendFiles(rootPath string) error {
 		return fmt.Errorf("transfer completed with %d errors", len(tm.errors))
 	}
 
-	fmt.Printf("\n✓ All %d files transferred successfully!\n", tm.totalFiles)
+	fmt.Printf("\n All %d files transferred successfully!\n", tm.totalFiles)
 	return nil
 }
 

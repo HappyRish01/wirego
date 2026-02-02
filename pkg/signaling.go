@@ -3,6 +3,7 @@ package pkg
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -11,8 +12,15 @@ import (
 	"time"
 )
 
-// TODO: Replace with your deployed Vercel API URL
 const SignalingServerURL = "https://wirego-signalling.vercel.app/api"
+
+const (
+	maxResponseSize = 1 << 20 // 1MB limit to prevent memory exhaustion
+	maxRetries      = 60      // maximum polling attempts
+	initialDelay    = 500 * time.Millisecond
+	maxDelay        = 3 * time.Second
+	requestTimeout  = 30 * time.Second
+)
 
 type SignalingClient struct {
 	client  *http.Client
@@ -59,14 +67,19 @@ func NewSignalingClient(code string) *SignalingClient {
 // CompressSDP compresses and base64-encodes the SDP
 func CompressSDP(sdp string) (string, error) {
 	var buf bytes.Buffer
-	// gz := gzip.NewWriter(&buf)
-	gz, _ := gzip.NewWriterLevel(&buf, gzip.BestSpeed)
+	gz, err := gzip.NewWriterLevel(&buf, gzip.BestSpeed)
+	if err != nil {
+		return "", fmt.Errorf("failed to create gzip writer: %w", err)
+	}
+
 	if _, err := gz.Write([]byte(sdp)); err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to compress data: %w", err)
 	}
+
 	if err := gz.Close(); err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to close gzip writer: %w", err)
 	}
+
 	return base64.RawStdEncoding.EncodeToString(buf.Bytes()), nil
 }
 
@@ -74,18 +87,20 @@ func CompressSDP(sdp string) (string, error) {
 func DecompressSDP(compressed string) (string, error) {
 	data, err := base64.RawStdEncoding.DecodeString(compressed)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to decode base64: %w", err)
 	}
+
 	gz, err := gzip.NewReader(bytes.NewReader(data))
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to create gzip reader: %w", err)
 	}
 	defer gz.Close()
 
-	decoded, err := io.ReadAll(gz)
+	decoded, err := io.ReadAll(io.LimitReader(gz, maxResponseSize))
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to decompress data: %w", err)
 	}
+
 	return string(decoded), nil
 }
 
@@ -109,12 +124,14 @@ func (s *SignalingClient) CreateOffer(sdp string) (string, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("server returned status %d", resp.StatusCode)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return "", fmt.Errorf("server returned status %d: %s", resp.StatusCode, string(body))
 	}
 
 	var createResp CreateResponse
-	if err := json.NewDecoder(resp.Body).Decode(&createResp); err != nil {
-		return "", err
+	dec := json.NewDecoder(io.LimitReader(resp.Body, maxResponseSize))
+	if err := dec.Decode(&createResp); err != nil {
+		return "", fmt.Errorf("failed to decode response: %w", err)
 	}
 
 	s.code = createResp.Code
@@ -136,12 +153,14 @@ func (s *SignalingClient) GetOffer(code string) (string, error) {
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("server returned status %d", resp.StatusCode)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return "", fmt.Errorf("server returned status %d: %s", resp.StatusCode, string(body))
 	}
 
 	var getResp GetResponse
-	if err := json.NewDecoder(resp.Body).Decode(&getResp); err != nil {
-		return "", err
+	dec := json.NewDecoder(io.LimitReader(resp.Body, maxResponseSize))
+	if err := dec.Decode(&getResp); err != nil {
+		return "", fmt.Errorf("failed to decode response: %w", err)
 	}
 
 	if !getResp.Found {
@@ -174,7 +193,7 @@ func (s *SignalingClient) SendAnswer(sdp string) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
 		return fmt.Errorf("server returned status %d: %s", resp.StatusCode, string(body))
 	}
 
@@ -183,14 +202,24 @@ func (s *SignalingClient) SendAnswer(sdp string) error {
 
 // WaitForAnswer polls for the answer SDP
 func (s *SignalingClient) WaitForAnswer() (string, error) {
-	maxAttempts := 60 // 60 attempts * 1 second = 1 minute timeout
-	delay := 500 * time.Millisecond
-	maxDelay := 3 * time.Second
+	return s.WaitForAnswerWithContext(context.Background())
+}
 
-	for i := 0; i < maxAttempts; i++ {
+// WaitForAnswerWithContext polls for the answer SDP with cancellation support
+func (s *SignalingClient) WaitForAnswerWithContext(ctx context.Context) (string, error) {
+	delay := initialDelay
+
+	for i := 0; i < maxRetries; i++ {
+		// Check if context is cancelled (Ctrl+C support)
+		select {
+		case <-ctx.Done():
+			return "", fmt.Errorf("operation cancelled: %w", ctx.Err())
+		default:
+		}
+
 		resp, err := s.client.Get(fmt.Sprintf("%s/answer?code=%s", s.baseURL, s.code))
 		if err != nil {
-			// time.Sleep(1 * time.Second)
+			// Network error - use exponential backoff before retry
 			time.Sleep(delay)
 			if delay < maxDelay {
 				delay *= 2
@@ -198,35 +227,45 @@ func (s *SignalingClient) WaitForAnswer() (string, error) {
 			continue
 		}
 
-		if resp.StatusCode == http.StatusOK {
-			var getResp GetResponse
-			// if err := json.NewDecoder(resp.Body).Decode(&getResp); err != nil {
-			// 	resp.Body.Close()
-			// 	return "", err
-			// }
-			dec := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)) // 1MB cap
-			dec.DisallowUnknownFields()
-			err := dec.Decode(&getResp)
+		// Always close response body to prevent resource leak
+		var result string
+		func() {
+			defer resp.Body.Close()
 
-			if err != nil {
-				return "", err
-			}
-			resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				var getResp GetResponse
+				dec := json.NewDecoder(io.LimitReader(resp.Body, maxResponseSize))
+				dec.DisallowUnknownFields()
 
-			if getResp.Found {
-				return DecompressSDP(getResp.SDP)
+				if err := dec.Decode(&getResp); err != nil {
+					// JSON decode error - continue trying
+					return
+				}
+
+				if getResp.Found {
+					decompressed, err := DecompressSDP(getResp.SDP)
+					if err == nil {
+						result = decompressed
+					}
+				}
 			}
-		} else {
-			resp.Body.Close()
+			// Non-200 responses are expected (answer not ready yet)
+		}()
+
+		// Check if we got a successful result
+		if result != "" {
+			return result, nil
 		}
 
+		// Wait before next poll
 		time.Sleep(1 * time.Second)
 	}
 
-	return "", fmt.Errorf("timeout waiting for answer")
+	return "", fmt.Errorf("timeout waiting for answer after %d attempts", maxRetries)
 }
 
 func (s *SignalingClient) Close() error {
-	// No persistent connection to close with HTTP
+	// Close idle connections to free resources
+	s.client.CloseIdleConnections()
 	return nil
 }

@@ -31,16 +31,18 @@
 
     Write-Host "build successful!`n" -ForegroundColor Green
     `
-    # Start sender in background
+    # Start sender in background (WebRTC mode - no -l flag)
     Write-Host "starting sender..." -ForegroundColor Yellow
-    $sender = Start-Process -FilePath ".\wirego.exe" -ArgumentList "send", "-l", $testDir -PassThru -NoNewWindow -RedirectStandardOutput ".\sender_output.txt"
+    $sender = Start-Process -FilePath ".\wirego.exe" -ArgumentList "send", $testDir -PassThru -NoNewWindow -RedirectStandardOutput ".\sender_output.txt"
 
-    # Wait for server to start and extract code from output
-    Start-Sleep -Seconds 2
+    # Wait for server to start and extract code from output (WebRTC codes are alphanumeric)
+    Start-Sleep -Seconds 3
     $output = Get-Content ".\sender_output.txt" -Raw
-    $code = [regex]::Match($output, "Code:\s*(\d{6})").Groups[1].Value
-
-    if (-not $code) {
+    
+    # Extract alphanumeric code for WebRTC
+    if ($output -match "Code:\s*(\w+)") {
+        $code = $matches[1]
+    } else {
         Write-Host "Failed to get code from sender!" -ForegroundColor Red
         Stop-Process -Id $sender.Id -Force
         exit 1
@@ -48,9 +50,12 @@
 
     Write-Host "sender started with code: $code" -ForegroundColor Cyan
 
-    # Run receiver
+    # Give sender time to connect to signaling server
+    Start-Sleep -Seconds 2
+
+    # Run receiver (WebRTC mode - no -l flag)
     Write-Host "`nstarting receiver..." -ForegroundColor Yellow
-    .\wirego.exe receive "-l" $code $receiveDir 
+    .\wirego.exe receive $code $receiveDir 
         
     # Verify received files
     Write-Host "`nverifying received files:" -ForegroundColor Yellow
@@ -61,7 +66,7 @@
         $sentCount = (Get-ChildItem -Recurse $testDir -File).Count
         $receivedCount = (Get-ChildItem -Recurse $receiveDir -File).Count
         
-        if ($sentCount -eq $receivedCount) {
+        if ($sentCount -ne $receivedCount) {
             Write-Host "`nTEST FAILED: Sent $sentCount files, received $receivedCount" -ForegroundColor Red
         } else {
             Write-Host "`nTEST PASSED: All $sentCount files transferred!" -ForegroundColor Green

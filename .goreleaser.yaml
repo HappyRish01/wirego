@@ -15,6 +15,9 @@ builds:
     binary: wirego
     ldflags:
       - -s -w
+      - -X github.com/HappyRish01/wirego/cmd.Version={{.Version}}
+      - -X github.com/HappyRish01/wirego/cmd.GitCommit={{.ShortCommit}}
+      - -X github.com/HappyRish01/wirego/cmd.BuildDate={{.Date}}
 
 archives:
   - format: tar.gz

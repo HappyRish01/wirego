@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/pion/webrtc/v3"
 )
@@ -166,6 +167,10 @@ func (tm *TransferManager) ReceiveFiles(destDir string) error {
 	tm.wg.Wait()
 
 	if len(tm.errors) > 0 {
+		fmt.Println("\n Errors occurred during transfer:")
+		for _, err := range tm.errors {
+			fmt.Printf("  • %v\n", err)
+		}
 		return fmt.Errorf("transfer completed with %d errors", len(tm.errors))
 	}
 
@@ -186,9 +191,11 @@ func (tm *TransferManager) fileWorker(rootPath string, fileChan <-chan FileMetad
 
 // sendFile sends a single file over its own data channel
 func (tm *TransferManager) sendFile(rootPath string, file FileMetadata) error {
-	// Create dedicated data channel for this file with ordered delivery
+	// Create dedicated data channel for this file with ordered and reliable delivery
+	// Default WebRTC data channel is reliable (like TCP) when Ordered=true
 	dcOptions := &webrtc.DataChannelInit{
 		Ordered: func() *bool { b := true; return &b }(),
+		// Note: Not setting MaxRetransmits means unlimited retries (reliable)
 	}
 	channelLabel := fmt.Sprintf("%s%d", FilePrefix, file.Index)
 	dc, err := tm.pc.CreateDataChannel(channelLabel, dcOptions)
@@ -235,14 +242,23 @@ func (tm *TransferManager) sendFile(rootPath string, file FileMetadata) error {
 		n, err := reader.Read(buffer)
 		if n > 0 {
 			// Handle backpressure - wait if buffer is full
+			maxWaitTime := 30 // 30 iterations ~ 3 seconds max wait
+			waitCount := 0
 			for dc.BufferedAmount() > MaxBufferedAmount {
-				// Wait a bit for buffer to drain
+				if waitCount >= maxWaitTime {
+					return fmt.Errorf("timeout waiting for buffer to drain")
+				}
+				// Check if channel is still open
+				if dc.ReadyState() != webrtc.DataChannelStateOpen {
+					return fmt.Errorf("channel closed while sending")
+				}
+				// Small sleep to allow buffer to drain (100ms)
 				select {
 				case <-channelReady:
-					return fmt.Errorf("channel closed while sending")
+					return fmt.Errorf("channel closed signal received")
 				default:
-					// Small sleep to allow buffer to drain
-					continue
+					waitCount++
+					time.Sleep(100 * time.Millisecond)
 				}
 			}
 
@@ -269,6 +285,15 @@ func (tm *TransferManager) sendFile(rootPath string, file FileMetadata) error {
 
 	fmt.Printf("\r✓ %s: 100%% (%s)\n", file.Path, formatBytes(uint64(file.Size)))
 
+	// Wait for buffered data to be sent before closing
+	// Give receiver time to process all chunks
+	for dc.BufferedAmount() > 0 {
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// Additional delay to ensure receiver processes everything
+	time.Sleep(100 * time.Millisecond)
+
 	// Close the data channel
 	dc.Close()
 	return nil
@@ -282,34 +307,63 @@ func (tm *TransferManager) handleFileChannel(dc *webrtc.DataChannel, destDir str
 	var f *os.File
 	var received int64
 	var lastProgress = -1
-	metadataReceived := false
+	var metadataReceived bool
+	var completed bool
+	var mu sync.Mutex // Protect shared state
 
 	dc.OnMessage(func(msg webrtc.DataChannelMessage) {
+		mu.Lock()
+		defer mu.Unlock()
+
 		if !metadataReceived {
 			// First message is metadata
-			json.Unmarshal(msg.Data, &file)
+			if err := json.Unmarshal(msg.Data, &file); err != nil {
+				tm.addError(fmt.Errorf("failed to parse metadata: %w", err))
+				completed = true
+				tm.wg.Done()
+				return
+			}
 			metadataReceived = true
 
 			// Create file
 			fullPath := filepath.Join(destDir, file.Path)
-			os.MkdirAll(filepath.Dir(fullPath), 0755)
+			if err := os.MkdirAll(filepath.Dir(fullPath), 0755); err != nil {
+				tm.addError(fmt.Errorf("failed to create directory: %w", err))
+				completed = true
+				tm.wg.Done()
+				return
+			}
 
 			var err error
 			f, err = os.Create(fullPath)
 			if err != nil {
-				tm.addError(err)
+				tm.addError(fmt.Errorf("failed to create file %s: %w", file.Path, err))
+				completed = true
 				tm.wg.Done()
 				return
 			}
 			return
 		}
 
-		// Write data chunk with buffering
+		// Safety check
+		if f == nil {
+			tm.addError(fmt.Errorf("file not initialized for %s", file.Path))
+			if !completed {
+				completed = true
+				tm.wg.Done()
+			}
+			return
+		}
+
+		// Write data chunk
 		n, err := f.Write(msg.Data)
 		if err != nil {
-			tm.addError(err)
+			tm.addError(fmt.Errorf("failed to write to %s: %w", file.Path, err))
 			f.Close()
-			tm.wg.Done()
+			if !completed {
+				completed = true
+				tm.wg.Done()
+			}
 			return
 		}
 
@@ -318,10 +372,31 @@ func (tm *TransferManager) handleFileChannel(dc *webrtc.DataChannel, destDir str
 
 		// Check if complete
 		if received >= file.Size {
-			f.Sync() // Flush to disk
+			if err := f.Sync(); err != nil {
+				tm.addError(fmt.Errorf("failed to sync %s: %w", file.Path, err))
+			}
+
+			// Close file before checksum verification
+			filePath := f.Name()
 			f.Close()
-			fmt.Printf("✓ %s: 100%% (%s)\n", file.Path, formatBytes(uint64(file.Size)))
-			tm.wg.Done()
+			f = nil
+
+			// Verify checksum
+			receivedChecksum, err := calculateChecksum(filePath)
+			if err != nil {
+				tm.addError(fmt.Errorf("failed to calculate checksum for %s: %w", file.Path, err))
+			} else if receivedChecksum != file.Checksum {
+				tm.addError(fmt.Errorf("checksum mismatch for %s: expected %s, got %s (file corrupted)",
+					file.Path, file.Checksum, receivedChecksum))
+				fmt.Printf("✗ %s: CORRUPTED (checksum mismatch)\n", file.Path)
+			} else {
+				fmt.Printf("✓ %s: 100%% (%s) [verified]\n", file.Path, formatBytes(uint64(file.Size)))
+			}
+
+			if !completed {
+				completed = true
+				tm.wg.Done()
+			}
 		} else {
 			// Progress indicator (update every 5%)
 			progress := int(float64(received) / float64(file.Size) * 100)
@@ -333,8 +408,25 @@ func (tm *TransferManager) handleFileChannel(dc *webrtc.DataChannel, destDir str
 	})
 
 	dc.OnClose(func() {
+		mu.Lock()
+		defer mu.Unlock()
+
+		// Close file if still open
 		if f != nil {
 			f.Close()
+			f = nil
+		}
+
+		// If transfer wasn't completed, report error and signal done
+		if !completed {
+			if metadataReceived {
+				tm.addError(fmt.Errorf("channel closed before completing transfer of %s (received %d/%d bytes)",
+					file.Path, received, file.Size))
+			} else {
+				tm.addError(fmt.Errorf("channel closed before receiving metadata"))
+			}
+			completed = true
+			tm.wg.Done()
 		}
 	})
 }

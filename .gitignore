@@ -1,6 +1,8 @@
 wirego.exe
 test/
 test_received/
+test_webrtc/
+test_webrtc_received/
 *.exe
 sender_output.txt
 test_image_cute.jpeg

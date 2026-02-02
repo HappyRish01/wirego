@@ -238,6 +238,8 @@ func sendViaLocalNetwork(path string, info os.FileInfo) {
 }
 
 func sendViaWebRTC(path string, info os.FileInfo) {
+
+	fmt.Println("sending via webRTC")
 	fmt.Println("\nWireGo - WebRTC File Sharing")
 	fmt.Println(strings.Repeat("─", 40))
 	fmt.Println("Initializing WebRTC connection...")

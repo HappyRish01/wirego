@@ -45,6 +45,7 @@ func NewSignalingClient(code string) *SignalingClient {
 		IdleConnTimeout:     30 * time.Second,
 		DisableCompression:  true, // we already compress SDP
 	}
+
 	return &SignalingClient{
 		client: &http.Client{
 			Timeout:   30 * time.Second,

@@ -12,7 +12,8 @@ import (
 	"time"
 )
 
-const SignalingServerURL = "https://wirego-signalling.vercel.app/api"
+// const SignalingServerURL = "https://wirego-signalling.vercel.app/api"
+const SignalingServerURL = "https://w-signal.vercel.app/api"
 
 const (
 	maxResponseSize = 1 << 20 // 1MB limit to prevent memory exhaustion
